@@ -1,0 +1,7 @@
+node_modules
+dist
+snow-photos
+package-lock.json
+.playwright-mcp
+test-results
+playwright-report
