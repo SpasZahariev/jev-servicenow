@@ -320,7 +320,11 @@ export type Draft = {
   activities: Activity[];
   attachments: Attachment[];
 };
-export const storageKey = 'snow-release-demo:v1';
+const demoRun = new URLSearchParams(window.location.search).get('demo_run');
+export const storageKey =
+  demoRun && /^[a-zA-Z0-9-]{1,64}$/.test(demoRun)
+    ? `snow-release-demo:v1:demo:${demoRun}`
+    : 'snow-release-demo:v1';
 export function readDraft(): Draft {
   const empty = { form: { ...initialForm }, stage: 0, activities: [], attachments: [] };
   try {

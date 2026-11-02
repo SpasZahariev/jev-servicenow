@@ -389,7 +389,7 @@ export async function runAutomation({
   await page.locator('#software-component-release').waitFor();
   if ((await page.locator('#stage').inputValue()) !== 'Draft') {
     throw new Error(
-      'Open a fresh isolated Draft. The automation will not reset an existing submitted record.',
+      'Open a fresh demo Draft. The automation will not reset an existing submitted record.',
     );
   }
   await selectFields(
@@ -475,7 +475,12 @@ export async function runAutomation({
   }
   const actual = await verify(page, scenario, narratives, submit);
   const saved = await page.evaluate(() => {
-    const raw = localStorage.getItem('snow-release-demo:v1');
+    const demoRun = new URLSearchParams(location.search).get('demo_run');
+    const key =
+      demoRun && /^[a-zA-Z0-9-]{1,64}$/.test(demoRun)
+        ? `snow-release-demo:v1:demo:${demoRun}`
+        : 'snow-release-demo:v1';
+    const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
   });
   if (!saved || saved.form.short_description !== scenario.fields.short_description) {

@@ -119,7 +119,7 @@ The runner reads `.env` in Node, not the browser. Configure `TYPESAFE_API_KEY`,
 shown in `.env.example`. `TYPESAFE_BASE_URL` is an optional API root override.
 Node 22.9 or later is required.
 
-The automation opens its own visible Chromium-compatible browser and fills a
+The automation opens a new foreground tab in your currently open Chromium-compatible browser and fills a
 fictional client-facing security hotfix. The default story exercises all
 conditional fields, searchable reference modals, multiple applications and
 repositories, schedules, risk controls, work notes, and attachment metadata.
@@ -139,8 +139,11 @@ Missing keys, unavailable providers, incorrect choices, and invalid generated
 text stop the demo instead of silently using fake model output.
 
 ```sh
-# Explicit browser path if Playwright's Chromium is not installed
-BROWSER_EXECUTABLE=/path/to/brave npm run demo:jev
+# Optional override for your open browser's local debugging endpoint
+npm run demo:jev -- --cdp http://127.0.0.1:9222
+
+# Explicitly launch a separate isolated browser instead
+BROWSER_EXECUTABLE=/path/to/brave npm run demo:jev -- --new-browser
 
 # Submit only to Confirm Release, never approve or deploy
 npm run demo:jev -- --submit
@@ -158,10 +161,21 @@ BROWSER_EXECUTABLE=/path/to/brave npm run test:jev
 
 Successful runs save `result.json` and credential-free `trace.jsonl` under
 `artifacts/jev/<timestamp>/`. The terminal prints model latency and applied fields.
-The browser stays open by default; close it or press Ctrl+C when finished.
-The browser uses an isolated context, so existing drafts in your normal browser
-remain untouched. Saved demo state disappears when this isolated browser closes,
-but the result file remains.
+By default the runner disconnects after completion and leaves the new tab open.
+It never closes your existing browser or touches other tabs. `--close` closes only
+the demo tab. Ctrl+C disconnects without closing it.
+
+Your browser must expose a local CDP debugging endpoint. The default is
+`http://127.0.0.1:9222`; set `BROWSER_CDP_URL` or pass `--cdp` to change it.
+The current local Brave setup already exposes this endpoint. If attachment fails,
+the runner stops instead of silently launching another browser. Enabling remote
+debugging in a different browser may require restarting it with its debugging
+settings enabled. The runner will not restart your browser.
+
+Each demo tab receives a unique `demo_run` URL parameter and a separate
+local-storage draft key. Existing drafts remain untouched, and reloading the
+same demo tab restores its filled release. `--new-browser` and `--headless`
+use the previous isolated-browser behavior.
 
 The repo-local agent skill is
 [`skills/jev-snowform/SKILL.md`](skills/jev-snowform/SKILL.md). Tell an agent to use

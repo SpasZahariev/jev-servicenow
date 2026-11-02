@@ -1,4 +1,10 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, chromium } from '@playwright/test';
+import {
+  connectExistingBrowser,
+  disconnectExistingBrowser,
+  openDemoTab,
+  validateCdpUrl,
+} from '../skills/jev-snowform/scripts/browser.mjs';
 // The production runner is plain Node ESM and is tested through its public functions.
 import {
   loadScenario,
@@ -95,6 +101,75 @@ const testConfig = {
   textModel: 'text-test',
   reasoning: 'none',
 };
+
+test('existing-browser mode opens a new tab, preserves drafts, and disconnects safely', async ({
+  browserName,
+}, testInfo) => {
+  expect(browserName).toBe('chromium');
+  const port = 19400 + testInfo.workerIndex;
+  const owner = await chromium.launch({
+    executablePath: process.env.BROWSER_EXECUTABLE || undefined,
+    headless: true,
+    args: ['--no-sandbox', `--remote-debugging-port=${port}`],
+  });
+  let attached;
+  try {
+    attached = await connectExistingBrowser(`http://127.0.0.1:${port}`);
+    const context = attached.contexts()[0];
+    const original = await context.newPage();
+    await original.goto('http://127.0.0.1:5173/');
+    await original.locator('#short_description').fill('Keep my existing browser draft');
+    await original.locator('#save-header').click();
+    const before = await original.evaluate(() => localStorage.getItem('snow-release-demo:v1'));
+    const originalUrl = original.url();
+    const demo = await openDemoTab(attached, originalUrl);
+    expect(demo.url()).toContain('demo_run=');
+    await expect(demo.locator('#short_description')).toHaveValue('');
+    const provider = simulatedProvider();
+    const models = createModels(testConfig, { fetchImpl: provider.fetchImpl });
+    expect(
+      (await runAutomation({ page: demo, scenario: await loadScenario(), models })).verified,
+    ).toBe(true);
+    expect(await original.evaluate(() => localStorage.getItem('snow-release-demo:v1'))).toBe(
+      before,
+    );
+    await disconnectExistingBrowser(attached, demo);
+    expect(owner.isConnected()).toBe(true);
+    attached = await connectExistingBrowser(`http://127.0.0.1:${port}`);
+    const pages = attached.contexts()[0].pages();
+    const keptOriginal = pages.find((page) => page.url() === originalUrl)!;
+    const keptDemo = pages.find((page) => page.url().includes('demo_run='))!;
+    await expect(keptOriginal.locator('#short_description')).toHaveValue(
+      'Keep my existing browser draft',
+    );
+    await keptDemo.reload();
+    await expect(keptDemo.locator('#release_version')).toHaveValue('2.4.1');
+    await disconnectExistingBrowser(attached, keptDemo, true);
+    expect(owner.isConnected()).toBe(true);
+    attached = await connectExistingBrowser(`http://127.0.0.1:${port}`);
+    expect(
+      attached
+        .contexts()[0]
+        .pages()
+        .some((page) => page.url().includes('demo_run=')),
+    ).toBe(false);
+    expect(
+      attached
+        .contexts()[0]
+        .pages()
+        .some((page) => page.url() === originalUrl),
+    ).toBe(true);
+  } finally {
+    if (attached?.isConnected()) await attached.close();
+    await owner.close();
+  }
+});
+
+test('browser debugging connections reject non-local endpoints', () => {
+  expect(() => validateCdpUrl('http://remote.example.com:9222')).toThrow('loopback');
+  expect(() => validateCdpUrl('ws://user:password@localhost:9222')).toThrow();
+  expect(validateCdpUrl('http://127.0.0.1:9222')).toBe('http://127.0.0.1:9222/');
+});
 
 test('Jev demo fills every active field with live DOM choices and simulated providers', async ({
   page,

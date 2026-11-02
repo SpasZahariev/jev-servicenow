@@ -5,6 +5,12 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadScenario, runAutomation, validateReplicaUrl } from './automation.mjs';
 import { createModels, validateEndpoint } from './models.mjs';
+import {
+  connectExistingBrowser,
+  disconnectExistingBrowser,
+  openDemoTab,
+  validateCdpUrl,
+} from './browser.mjs';
 
 const { values } = parseArgs({
   options: {
@@ -12,6 +18,8 @@ const { values } = parseArgs({
     scenario: { type: 'string' },
     output: { type: 'string' },
     browser: { type: 'string' },
+    cdp: { type: 'string' },
+    'new-browser': { type: 'boolean', default: false },
     headless: { type: 'boolean', default: false },
     close: { type: 'boolean', default: false },
     submit: { type: 'boolean', default: false },
@@ -22,13 +30,15 @@ const { values } = parseArgs({
 
 if (values.help) {
   console.log(`Usage: npm run demo:jev -- [options]
-  --check          Check keys, scenario, browser executable, and replica. No paid API calls.
+  --check          Check keys, scenario, browser connection, and replica. No paid API calls.
   --url URL        Loopback replica URL. Default: SNOW_FORM_URL or http://127.0.0.1:5173.
   --scenario PATH  Synthetic release JSON. Default: the skill's release.json.
   --browser PATH   Chromium-compatible executable. Also accepts BROWSER_EXECUTABLE.
+  --cdp URL        Existing browser debugging endpoint. Default: BROWSER_CDP_URL or localhost:9222.
+  --new-browser    Launch a separate isolated browser instead of a tab in your open browser.
   --submit         Submit to Confirm Release after filling. Default: save a draft.
   --headless       Hide the browser and exit after verification.
-  --close          Close the browser after the run instead of keeping it open.
+  --close          Close only the demo tab when attached, or the separate browser when launched.
   --output PATH    Artifact directory. Default: artifacts/jev/<timestamp>.`);
   process.exit(0);
 }
@@ -39,6 +49,7 @@ let page;
 let logQueue = Promise.resolve();
 const controller = new AbortController();
 let interrupted = false;
+const useExisting = !values['new-browser'] && !values.headless;
 
 function log(event) {
   const entry = { time: new Date().toISOString(), ...event };
@@ -64,7 +75,10 @@ function log(event) {
 
 async function close() {
   controller.abort();
-  if (browser) await browser.close().catch(() => {});
+  if (browser) {
+    if (useExisting) await disconnectExistingBrowser(browser, page, values.close);
+    else await browser.close().catch(() => {});
+  }
   await logQueue;
 }
 
@@ -80,6 +94,14 @@ process.once('SIGTERM', () => {
 });
 
 async function keepOpen() {
+  if (useExisting) {
+    if (page && !page.isClosed() && !values.close) {
+      console.log(
+        'Demo tab left open in your browser. Jev disconnects without closing your browser.',
+      );
+    }
+    return;
+  }
   if (!browser?.isConnected() || values.close || values.headless || interrupted) return;
   console.log(
     'Browser kept open. Inspect the completed form, then close the window or press Ctrl+C.',
@@ -124,7 +146,7 @@ try {
           '/usr/bin/google-chrome',
           '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
         ].find(existsSync));
-  if (!executable || !existsSync(executable)) {
+  if (!useExisting && (!executable || !existsSync(executable))) {
     throw new Error(
       'Browser executable not found. Set BROWSER_EXECUTABLE or run npx playwright install chromium.',
     );
@@ -138,27 +160,40 @@ try {
   if (!response.ok || !(await response.text()).includes('/src/main.tsx')) {
     throw new Error('URL is not the running Vite replica. Check SNOW_FORM_URL and npm start.');
   }
+  const cdpUrl = useExisting
+    ? validateCdpUrl(
+        values.cdp ||
+          process.env.BROWSER_CDP_URL ||
+          process.env.BU_CDP_URL ||
+          'http://127.0.0.1:9222',
+      )
+    : undefined;
+  if (useExisting) browser = await connectExistingBrowser(cdpUrl);
   if (values.check) {
     console.log(
-      `Ready. Replica: ${url}\nBrowser: ${executable}\nScenario: ${scenario.title}\nModel keys are present. No API requests were made.`,
+      `Ready. Replica: ${url}\nBrowser: ${useExisting ? `existing browser at ${cdpUrl}` : executable}\nScenario: ${scenario.title}\nModel keys are present. No API requests were made.`,
     );
   } else {
     output = resolve(
       values.output || `artifacts/jev/${new Date().toISOString().replace(/[:.]/g, '-')}`,
     );
     await mkdir(output, { recursive: true, mode: 0o700 });
-    browser = await chromium.launch({
-      executablePath: executable,
-      headless: values.headless,
-      args: ['--no-sandbox'],
-    });
-    const context = await browser.newContext({
-      viewport: { width: 1440, height: 1000 },
-      timezoneId: scenario.schedule.timezone,
-    });
-    page = await context.newPage();
+    if (useExisting) {
+      page = await openDemoTab(browser, url);
+    } else {
+      browser = await chromium.launch({
+        executablePath: executable,
+        headless: values.headless,
+        args: ['--no-sandbox'],
+      });
+      const context = await browser.newContext({
+        viewport: { width: 1440, height: 1000 },
+        timezoneId: scenario.schedule.timezone,
+      });
+      page = await context.newPage();
+      await page.goto(url, { waitUntil: 'networkidle' });
+    }
     page.setDefaultTimeout(10000);
-    await page.goto(url, { waitUntil: 'networkidle' });
     const models = createModels(config, { log });
     console.log(
       `Release: ${scenario.title}\nReplica: ${url}\nModels: ${config.typesafeModel} + ${config.textModel}\nDOM only. Starting live model calls.`,

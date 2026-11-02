@@ -10,7 +10,9 @@ Run from the repository root. This skill's deterministic helper is
 
 1. Start the replica separately with `npm start`. Leave that terminal running.
 2. Check prerequisites with `npm run demo:jev -- --check`. Read `.env.example` for settings; never print `.env` or credentials.
-3. Launch `npm run demo:jev`. It opens a separate visible browser, fills the release with live model calls, saves a draft, and keeps the browser open for inspection. Close the window or press Ctrl+C to finish.
+3. Launch `npm run demo:jev`. It attaches to the currently open Chromium-compatible browser, opens a new foreground tab, fills the release with live model calls, saves a draft, and disconnects. The demo tab and all existing tabs stay open.
+
+The browser must expose CDP on `http://127.0.0.1:9222`. Override with `BROWSER_CDP_URL` or `--cdp`. Do not restart or close the user's browser to enable debugging without permission. If debugging is unavailable, explain how to enable it or offer explicit `--new-browser` mode. Never silently launch another browser when attachment fails.
 
 The run makes paid TypeSafe and OpenAI-compatible text-model requests. It reads controls from the live DOM, never screenshots. Jev chooses dropdown values, reference records, multi-record membership, radio values, and checkboxes. The executor uses observed record IDs and stable form attributes. Exact release facts, searches, navigation, dates, attachments, and save operations are deterministic. The text model writes the large narrative fields in one request. No mock provider or canned narrative fallback exists in the demo command.
 
@@ -23,11 +25,15 @@ npm run demo:jev -- --url http://127.0.0.1:5173
 npm run demo:jev -- --scenario /path/to/release.json
 npm run demo:jev -- --submit
 npm run demo:jev -- --headless --close
+npm run demo:jev -- --new-browser
+npm run demo:jev -- --cdp http://127.0.0.1:9222
 ```
 
 `--submit` submits only to Confirm Release. It never approves, starts, or closes the change. The default only saves a draft.
 
-An isolated browser context prevents overwriting a user's existing draft. Results and credential-free decision logs are written under `artifacts/jev/`. Browser-local saves disappear when the isolated browser closes; the exported result file remains. Attachments contain synthetic evidence and the replica stores metadata only.
+A unique `demo_run` query parameter gives each new tab its own local-storage draft key, so existing browser drafts remain untouched. Reloading the same tab restores its demo draft. Results and credential-free decision logs are written under `artifacts/jev/`. Attachments contain synthetic evidence and the replica stores metadata only.
+
+`--close` closes only the owned demo tab when attached. Ctrl+C disconnects and leaves that tab open. `--new-browser` or `--headless` explicitly launches an isolated browser; only that launched browser may be closed by the runner.
 
 Only loopback replica URLs are allowed. API overrides must use HTTPS; local HTTP endpoints are allowed for provider testing. API calls, timeouts, and retry counts are bounded. A missing key, malformed model response, stale control, mismatched selection, or failed outcome verification stops the run. Keep the visible failed form for diagnosis; do not repeatedly restart paid runs or weaken verification to make a demo appear successful.
 
