@@ -1,0 +1,43 @@
+{
+  "title": "Clients Pillar AI security hotfix 2.4.1",
+  "brief": "Prepare an emergency production release for the Clients Pillar AI Incubator and Client Portal. A synthetic security review found a cross-tenant cache-key collision in the AI summary endpoint. The hotfix adds tenant isolation to cache keys, invalidates existing summary caches, and updates the client portal to handle refreshed summaries. No database schema or permission changes are included. Alex Morgan requested the release; Data Platform owns the cache fix, Taylor Reed manages the release, and Sarah Chen is the deputy. Luxembourg-regulated client services are affected. Plan a 10-minute customer-visible outage inside a one-hour evening implementation window. Treat change impact and deployment risk as high because both client-facing applications run in production. A security review and advance customer communication are required. This is entirely fictional demonstration data, not a real incident or test result.",
+  "fields": {
+    "requested_by": "Alex Morgan",
+    "type": "Emergency",
+    "category": "Security",
+    "change_impact": "High",
+    "assignment_group": "Data Platform",
+    "release_manager": "Taylor Reed",
+    "release_manager_deputy": "Sarah Chen",
+    "lux_related": "Yes",
+    "lux_approval": "LUX-DEMO-018",
+    "components": ["Clients Pillar AI Incubator", "Client Portal"],
+    "repositories": ["clients/ai-incubator", "clients/client-portal"],
+    "short_description": "Release Clients Pillar AI 2.4.1: isolate tenant caches and refresh client summaries",
+    "release_version": "2.4.1",
+    "environment": "Production",
+    "risk_level": "High",
+    "customer_impact": "Yes",
+    "outage_required": true,
+    "outage_minutes": "10",
+    "security_review": true,
+    "security_reference": "SEC-DEMO-041"
+  },
+  "lookup_queries": {
+    "requested_by": "Alex",
+    "assignment_group": "Data",
+    "release_manager": "Taylor",
+    "release_manager_deputy": "Sarah",
+    "components": "Client",
+    "repositories": "clients/"
+  },
+  "schedule": {
+    "days_from_now": 3,
+    "start_time": "20:00",
+    "duration_minutes": 60
+  },
+  "evidence": {
+    "name": "clients-pillar-ai-2.4.1-synthetic-test-evidence.txt",
+    "text": "SYNTHETIC DEMO EVIDENCE. No real tests or security review were executed.\nScenario: Clients Pillar AI security hotfix 2.4.1.\nIllustrative checks: tenant cache isolation, summary refresh, smoke tests, previous-version restore.\nReferences: SEC-DEMO-041 and LUX-DEMO-018 are fictional.\n"
+  }
+}

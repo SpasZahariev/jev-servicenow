@@ -3,15 +3,20 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.9.0"
+  },
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "start": "vite --host 0.0.0.0",
+    "demo:jev": "node --env-file-if-exists=.env skills/jev-snowform/scripts/run.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:jev": "playwright test tests/jev.spec.ts"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
