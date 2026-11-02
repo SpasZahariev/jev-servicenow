@@ -11,6 +11,7 @@ import {
   openDemoTab,
   validateCdpUrl,
 } from './browser.mjs';
+import { parseSpeed } from './presentation.mjs';
 
 const { values } = parseArgs({
   options: {
@@ -25,6 +26,10 @@ const { values } = parseArgs({
     submit: { type: 'boolean', default: false },
     check: { type: 'boolean', default: false },
     help: { type: 'boolean', default: false },
+    speed: { type: 'string' },
+    pace: { type: 'string' },
+    inspector: { type: 'boolean', default: true },
+    'no-inspector': { type: 'boolean', default: false },
   },
 });
 
@@ -37,6 +42,10 @@ if (values.help) {
   --cdp URL        Existing browser debugging endpoint. Default: BROWSER_CDP_URL or localhost:9222.
   --new-browser    Launch a separate isolated browser instead of a tab in your open browser.
   --submit         Submit to Confirm Release after filling. Default: save a draft.
+  --pace MODE      realistic (default) or scaled. Realistic pauses around individual inputs.
+  --speed NUMBER   Speed from 0.05 to 1. An explicit speed alone selects scaled playback.
+  --inspector      Show the current input's outline and label. Enabled by default.
+  --no-inspector   Disable focus borders and labels.
   --headless       Hide the browser and exit after verification.
   --close          Close only the demo tab when attached, or the separate browser when launched.
   --output PATH    Artifact directory. Default: artifacts/jev/<timestamp>.`);
@@ -114,6 +123,10 @@ async function keepOpen() {
 }
 
 try {
+  const speed = parseSpeed(values.speed || '1');
+  const pace = values.pace || (values.speed ? 'scaled' : 'realistic');
+  if (!['realistic', 'scaled'].includes(pace))
+    throw new Error('--pace must be realistic or scaled.');
   const url = validateReplicaUrl(
     values.url || process.env.SNOW_FORM_URL || 'http://127.0.0.1:5173',
   );
@@ -205,6 +218,9 @@ try {
       log,
       submit: values.submit,
       signal: controller.signal,
+      speed,
+      pace,
+      inspector: values.inspector && !values['no-inspector'],
     });
     await writeFile(resolve(output, 'result.json'), `${JSON.stringify(result, null, 2)}\n`, {
       mode: 0o600,

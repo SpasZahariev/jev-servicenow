@@ -1,7 +1,8 @@
 # Software component release demo
 
 React and TypeScript replica of the Change Request form in `snow-photos/`.
-No animations, external integrations, or model API calls.
+The form has no animations or external ServiceNow integration. The separate
+automation runner calls Jev and a text-generation model.
 
 ## Run
 
@@ -114,6 +115,36 @@ npm run demo:jev -- --check
 npm run demo:jev
 ```
 
+For a presentation-paced run with an inspector outline:
+
+```sh
+npm run demo:jev
+```
+
+The demo defaults to `--pace realistic` with the inspector enabled.
+Each control is highlighted before input, filled individually, and held visible
+after input before the next control starts. Controls are never filled concurrently.
+
+Realistic pacing pauses 650 ms before each input and 850 ms after it. Generated
+narrative fields get a 2.2-second review pause after insertion. Model calls keep
+their actual latency, without artificial inference delays. Text is inserted
+as a complete generated field, not fake character-by-character human typing.
+The default scenario takes roughly 1-2 minutes, plus provider latency.
+This is a presentation of real automation, not a claim that a human fills a
+release form at this speed.
+
+For multiplier-based playback, use `--speed 0.05 --inspector`. An explicit speed
+without `--pace` selects scaled mode. To slow realistic pacing further, use
+`--pace realistic --speed 0.5`.
+`--inspector` draws a teal outline for selections, buttons, and deterministic
+demo steps, and a purple outline while text-model output is entered.
+Its badge identifies the actual source and shows the current control's
+DOM label. It works inside lookup dialogs and scrolls offscreen targets into
+view. It adds no animations and does not intercept input. The outline clears
+after successful completion. The inspector uses exactly one thick border overlay,
+without an additional input outline or inset border. To restore the
+fast run, use `npm run demo:jev -- --speed 1 --no-inspector`.
+
 The runner reads `.env` in Node, not the browser. Configure `TYPESAFE_API_KEY`,
 `TYPESAFE_MODEL`, `TEXT_MODEL_API_KEY`, `TEXT_MODEL_BASE_URL`, and `TEXT_MODEL` as
 shown in `.env.example`. `TYPESAFE_BASE_URL` is an optional API root override.
@@ -124,10 +155,14 @@ fictional client-facing security hotfix. The default story exercises all
 conditional fields, searchable reference modals, multiple applications and
 repositories, schedules, risk controls, work notes, and attachment metadata.
 
-Jev makes ten real requests in the default run. Dropdown questions and
+Jev makes eighteen real requests in the default run. Dropdown questions and
 multi-record membership decisions are batched in a single request per group.
-Choices come from the live DOM. A separate text-model request generates all
-eight narrative fields together. Exact version, dates, reference numbers,
+Choices come from the live DOM. Each of the eight narrative fields gets a
+separate Jev delegation decision followed by its own text-model request.
+The field is teal while Jev decides, then purple during generation and insertion.
+Previously, narrative generation was scheduled directly by the script. It is now
+explicitly gated by Jev. Text generation is for open-ended fields, not a fallback
+that silently replaces failed finite-choice decisions. Exact version, dates, reference numbers,
 short description, and outage duration come from the scenario; deterministic
 browser code performs navigation, searches, input, posting notes, and saving.
 No screenshots, agent swarm, prewritten narrative fallback, or model-generated
@@ -185,3 +220,76 @@ agent configuration. Its synthetic story is in
 The design follows the decision/text split in the local `jev-ultrafast`
 reference project without depending on its Python installation or browser
 daemon.
+
+## Build a Jev skill for another ServiceNow form
+
+Use this demo as a pattern, not a generic production ServiceNow connector.
+The runner currently accepts only local replica URLs.
+
+### Write the skill
+
+Keep `SKILL.md` short: when to use it, prerequisites, the launch command,
+permitted actions, success criteria, and when to stop. Put executable browser
+logic in scripts and release facts in a separate JSON file.
+
+```text
+skills/my-servicenow-form/
+  SKILL.md
+  assets/request.json
+  scripts/run.mjs
+```
+
+```markdown
+---
+name: my-servicenow-form
+description: Fill the approved ServiceNow request form using Jev choices and delegated narrative generation.
+---
+
+Read assets/request.json. Check browser access and model configuration.
+Run the helper from the repository root.
+Use observed DOM controls and record IDs, never model-generated selectors.
+Fill one field at a time. Verify references and conditional requirements.
+Save a draft by default; require explicit authorization before submitting.
+Stop on missing facts, invalid choices, changed controls, or validation errors.
+Never print credentials or invent approvals and test evidence.
+```
+
+### Implement the browser loop
+
+1. **Observe.** Read field labels, types, current values, required state, visible
+   options, and lookup results. Prefer stable IDs or accessible labels. Handle
+   the target form's frames and custom controls explicitly.
+2. **Ask Jev.** Send the request facts and observed state to
+   `/v1/systemone`. Use `type: "choice"` questions with criteria keyed by
+   observed option or record IDs. Batch independent choices if useful.
+3. **Execute.** Validate the returned choice and probabilities, recheck the
+   control, then apply the selected value through normal browser input.
+   Keep selectors and execution in trusted code.
+4. **Delegate narratives.** Offer Jev `use_text_model` or `blocked`. On delegation,
+   send the field label, request facts, and writing requirements to the text
+   model. Validate its JSON and length before inserting. Do not use generation
+   to silently recover from an invalid finite-choice decision.
+5. **Reobserve and verify.** Open relevant tabs and lookup dialogs, select actual
+   records rather than just typing display names, and fill newly required fields.
+   Check the final values, resolved references, schedule, errors, and saved state.
+
+### Reuse this implementation
+
+- `assets/release.json`: fictional request facts, lookup queries, schedule, evidence.
+- `scripts/automation.mjs`: DOM observations, Jev questions, field execution, verification.
+- `scripts/models.mjs`: provider requests, budgets, retries, response validation.
+- `scripts/browser.mjs`: attach to the open browser and create an owned tab.
+- `scripts/presentation.mjs`: sequential pacing and teal-to-purple handoff.
+
+These paths are relative to `skills/jev-snowform/`. The skill guides the agent;
+the helper performs the actual automation. Editing `SKILL.md` alone does not
+change the helper's selectors or routing.
+
+For a real ServiceNow instance, replace the replica selectors and local-storage
+checks, authenticate through the authorized browser session, restrict navigation
+to approved instance hosts, and verify the saved record in ServiceNow itself.
+Confirm that request data may be sent to the configured model providers.
+Keep secrets outside browser code and logs. Test against a non-production
+instance, including invalid references, hidden fields, stale DOM, provider errors,
+and failed saves. Mock-provider tests prove execution behavior; only a live
+provider run verifies the model integration.

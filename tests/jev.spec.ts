@@ -5,6 +5,7 @@ import {
   openDemoTab,
   validateCdpUrl,
 } from '../skills/jev-snowform/scripts/browser.mjs';
+import { createPresentation, parseSpeed } from '../skills/jev-snowform/scripts/presentation.mjs';
 // The production runner is plain Node ESM and is tested through its public functions.
 import {
   loadScenario,
@@ -53,7 +54,9 @@ function simulatedProvider({
         Object.entries(body.questions).map(([key, question]) => {
           const { criteria } = question;
           let choice: string | undefined;
-          if (key === 'record') {
+          if (key === 'operation' && body.state.phase.startsWith('delegate:')) {
+            choice = 'use_text_model';
+          } else if (key === 'record') {
             choice = Object.keys(criteria).find((id) => criteria[id].name === desired[lookupField]);
           } else if (key.startsWith('record_')) {
             const name = criteria.include.record_name;
@@ -171,6 +174,251 @@ test('browser debugging connections reject non-local endpoints', () => {
   expect(validateCdpUrl('http://127.0.0.1:9222')).toBe('http://127.0.0.1:9222/');
 });
 
+test('quarter-speed playback pads inference and actions without changing their results', async () => {
+  let clock = 0;
+  const waits: number[] = [];
+  const presentation = createPresentation({
+    page: undefined,
+    speed: 0.25,
+    now: () => clock,
+    sleep: async (ms: number) => {
+      waits.push(ms);
+      clock += ms;
+    },
+  });
+  const result = await presentation.infer(async () => {
+    clock += 200;
+    return 'model-result';
+  });
+  expect(result).toBe('model-result');
+  expect(clock).toBe(800);
+  await presentation.act(undefined, async () => {
+    clock += 200;
+  });
+  expect(clock).toBe(1600);
+  expect(waits).toEqual([600, 600]);
+  expect(presentation.statistics().added_delay_ms).toBe(1200);
+  expect(() => parseSpeed('0')).toThrow();
+  expect(() => parseSpeed('fast')).toThrow();
+  expect(() => parseSpeed('2')).toThrow();
+  expect(parseSpeed('0.25')).toBe(0.25);
+});
+
+test('five-times-slower presentation holds each field before and after input, sequentially', async ({
+  page,
+}) => {
+  await page.goto('/');
+  let clock = 0;
+  const visits: string[] = [];
+  const presentation = createPresentation({
+    page,
+    speed: 0.05,
+    inspector: true,
+    now: () => clock,
+    sleep: async (ms: number) => {
+      const field = await page.locator('[data-jev-focused]').getAttribute('id');
+      visits.push(`${field}:${ms}`);
+      await expect(page.locator('[data-jev-highlight]')).toBeVisible();
+      clock += ms;
+    },
+  });
+  const first = page.locator('#short_description');
+  const second = page.locator('#description');
+  await presentation.act(
+    first,
+    async () => {
+      await expect(second).toHaveValue('');
+      await first.fill('First input only');
+    },
+    'scenario',
+  );
+  await presentation.act(
+    second,
+    async () => {
+      await expect(first).toHaveValue('First input only');
+      await second.fill('Second input only');
+    },
+    'text-model',
+  );
+  expect(visits).toEqual([
+    'short_description:1900',
+    'short_description:950',
+    'description:1900',
+    'description:950',
+  ]);
+  expect(presentation.statistics().added_delay_ms).toBe(5700);
+  await presentation.clear();
+});
+
+test('presentation rejects concurrent input instead of filling two fields together', async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const presentation = createPresentation({ page: undefined });
+  const first = presentation.act(undefined, () => gate);
+  await expect(presentation.act(undefined, async () => {})).rejects.toThrow('one at a time');
+  release();
+  await first;
+});
+
+test('realistic pace uses natural inference and longer review pauses for generated text', async () => {
+  let clock = 0;
+  const waits: number[] = [];
+  const presentation = createPresentation({
+    page: undefined,
+    pace: 'realistic',
+    now: () => clock,
+    sleep: async (ms: number) => {
+      waits.push(ms);
+      clock += ms;
+    },
+  });
+  await presentation.infer(async () => {
+    clock += 200;
+  });
+  expect(waits).toEqual([]);
+  await presentation.act(undefined, async () => {}, 'jev');
+  await presentation.act(undefined, async () => {}, 'text-model');
+  expect(waits).toEqual([650, 850, 650, 2200]);
+  expect(presentation.statistics().pace).toBe('realistic');
+});
+
+test('inspector outlines the current DOM target without intercepting clicks or animating', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const presentation = createPresentation({ page, inspector: true });
+  const input = page.locator('#short_description');
+  await presentation.act(input, async () => {
+    await expect(input).toHaveAttribute('data-jev-focused', 'true');
+    await expect(page.locator('[data-jev-inspector]')).toContainText('Short description');
+    expect(await input.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe('none');
+    expect(await input.evaluate((element) => getComputedStyle(element).boxShadow)).toBe('none');
+    await expect(page.locator('[data-jev-highlight]')).toHaveCount(1);
+    await expect(page.locator('[data-jev-highlight="jev"]')).toBeVisible();
+    expect(
+      await page
+        .locator('[data-jev-highlight]')
+        .evaluate((element) => getComputedStyle(element).pointerEvents),
+    ).toBe('none');
+    expect(
+      await page
+        .locator('[data-jev-highlight]')
+        .evaluate((element) => getComputedStyle(element).borderColor),
+    ).toBe('rgb(20, 184, 166)');
+    await expect(input).toHaveAttribute('data-jev-source', 'jev');
+    await input.fill('Inspectable demo release');
+  });
+  const lookup = page.locator('#assignment_group-lookup');
+  await presentation.act(lookup, () => lookup.click());
+  const search = page.locator('#assignment_group-modal-search');
+  await presentation.act(search, async () => {
+    await expect(page.locator('dialog[open] [data-jev-inspector]')).toContainText(
+      'Search Assignment group',
+    );
+    await search.fill('Data');
+    await page.screenshot({ path: test.info().outputPath('inspector-modal.png') });
+  });
+  await expect(page.locator('[data-jev-focused]')).toHaveCount(1);
+  expect(
+    await page
+      .locator('[data-jev-inspector]')
+      .evaluate((element) => getComputedStyle(element).pointerEvents),
+  ).toBe('none');
+  await page.keyboard.press('Escape');
+  const description = page.locator('#description');
+  await presentation.act(
+    description,
+    async () => {
+      await expect(description).toHaveAttribute('data-jev-source', 'text-model');
+      await expect(page.locator('[data-jev-highlight="text-model"]')).toBeVisible();
+      expect(
+        await page
+          .locator('[data-jev-highlight]')
+          .evaluate((element) => getComputedStyle(element).borderColor),
+      ).toBe('rgb(168, 85, 247)');
+      await expect(page.locator('[data-jev-inspector]')).toContainText(
+        'Text model input: Description',
+      );
+      await description.fill('A synthetic release description written by the text model.');
+      await page.screenshot({ path: test.info().outputPath('inspector-text.png') });
+    },
+    'text-model',
+  );
+  await presentation.act(
+    input,
+    async () => {
+      await expect(input).toHaveAttribute('data-jev-source', 'scenario');
+      expect(
+        await page
+          .locator('[data-jev-highlight]')
+          .evaluate((element) => getComputedStyle(element).borderColor),
+      ).toBe('rgb(20, 184, 166)');
+      await expect(page.locator('[data-jev-inspector]')).toContainText(
+        'Demo script: Short description',
+      );
+    },
+    'scenario',
+  );
+  await presentation.clear();
+  await expect(page.locator('[data-jev-focused]')).toHaveCount(0);
+  await expect(page.locator('[data-jev-inspector]')).toHaveCount(0);
+  await expect(page.locator('[data-jev-source]')).toHaveCount(0);
+  await expect(page.locator('[data-jev-highlight]')).toHaveCount(0);
+});
+
+test('all button focus borders stay teal before and after clicks, including scripted navigation', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const presentation = createPresentation({ page, inspector: true });
+  for (const id of ['tab-risk', 'tab-planning', 'save-header']) {
+    const button = page.locator(`#${id}`);
+    await presentation.act(
+      button,
+      async () => {
+        await button.focus();
+        await button.click();
+        await expect(page.locator('[data-jev-highlight]')).toHaveCount(1);
+        expect(
+          await page
+            .locator('[data-jev-highlight]')
+            .evaluate((element) => getComputedStyle(element).borderColor),
+        ).toBe('rgb(20, 184, 166)');
+        expect(await button.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe(
+          'none',
+        );
+      },
+      'scenario',
+    );
+  }
+  await presentation.clear();
+});
+
+test('inspector playback completes the form and removes its temporary focus outline', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const provider = simulatedProvider();
+  const models = createModels(testConfig, { fetchImpl: provider.fetchImpl });
+  const sources = new Set<string>();
+  const result = await runAutomation({
+    page,
+    scenario: await loadScenario(),
+    models,
+    inspector: true,
+    log: (event: { kind: string; source?: string }) => {
+      if (event.kind === 'presentation' && event.source) sources.add(event.source);
+    },
+  });
+  expect(result.verified).toBe(true);
+  expect(result.presentation.inspector).toBe(true);
+  expect([...sources].sort()).toEqual(['jev', 'scenario', 'text-model']);
+  await expect(page.locator('[data-jev-focused]')).toHaveCount(0);
+  await expect(page.locator('[data-jev-inspector]')).toHaveCount(0);
+});
+
 test('Jev demo fills every active field with live DOM choices and simulated providers', async ({
   page,
 }) => {
@@ -190,9 +438,9 @@ test('Jev demo fills every active field with live DOM choices and simulated prov
   });
   expect(result.verified).toBe(true);
   expect(result.mode).toBe('saved-draft');
-  expect(models.statistics.jev_calls).toBe(10);
-  expect(models.statistics.text_calls).toBe(1);
-  expect(provider.requests).toHaveLength(11);
+  expect(models.statistics.jev_calls).toBe(18);
+  expect(models.statistics.text_calls).toBe(8);
+  expect(provider.requests).toHaveLength(26);
   expect(result.form.lux_approval).toBe('LUX-DEMO-018');
   expect(result.form.outage_minutes).toBe('10');
   expect(result.form.security_reference).toBe('SEC-DEMO-041');
@@ -321,9 +569,10 @@ test('outcome verification catches missing form values before saving', async ({ 
   provider.fetchImpl = async (url, options) => {
     const response = await originalFetch(url, options);
     if (url.endsWith('/chat/completions')) {
+      const activeTab = await page.locator('[role="tab"][aria-selected="true"]').getAttribute('id');
       await page.locator('#tab-planning').click();
       await page.locator('#release_version').fill('wrong-version');
-      await page.locator('#tab-risk').click();
+      await page.locator(`#${activeTab}`).click();
     }
     return response;
   };
@@ -332,6 +581,41 @@ test('outcome verification catches missing form values before saving', async ({ 
     'verification failed: release_version',
   );
   expect(await page.evaluate(() => localStorage.getItem('snow-release-demo:v1'))).toBeNull();
+});
+
+test('each narrative is explicitly delegated by Jev before its text-model call', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const provider = simulatedProvider();
+  const originalFetch = provider.fetchImpl;
+  const owners: string[] = [];
+  provider.fetchImpl = async (url, options) => {
+    const body = JSON.parse(String(options.body));
+    if (url.endsWith('/v1/systemone') && body.state.phase.startsWith('delegate:')) {
+      await expect(page.locator('[data-jev-highlight="jev"]')).toHaveCount(1);
+      owners.push(`jev:${body.state.phase.split(':')[1]}`);
+    } else if (url.endsWith('/chat/completions')) {
+      await expect(page.locator('[data-jev-highlight="text-model"]')).toHaveCount(1);
+      const fields = JSON.parse(body.messages[1].content).requested_fields;
+      expect(fields).toHaveLength(1);
+      owners.push(`text:${fields[0].id}`);
+    }
+    return originalFetch(url, options);
+  };
+  const models = createModels(testConfig, { fetchImpl: provider.fetchImpl });
+  const result = await runAutomation({
+    page,
+    scenario: await loadScenario(),
+    models,
+    inspector: true,
+  });
+  expect(result.verified).toBe(true);
+  expect(owners).toHaveLength(16);
+  for (let i = 0; i < owners.length; i += 2) {
+    expect(owners[i]).toMatch(/^jev:/);
+    expect(owners[i + 1]).toBe(owners[i].replace(/^jev:/, 'text:'));
+  }
 });
 
 test('provider failures expose only status, not credentials or error bodies', async () => {

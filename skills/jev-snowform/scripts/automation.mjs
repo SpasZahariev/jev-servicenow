@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
+import { createPresentation } from './presentation.mjs';
 
 export const defaultScenario = new URL('../assets/release.json', import.meta.url);
 
@@ -122,7 +123,7 @@ async function ensureUnchanged(before, read, label) {
   }
 }
 
-async function selectFields(page, keys, scenario, models, log, signal) {
+async function selectFields(page, keys, scenario, models, log, signal, act) {
   const observed = await readSelects(page, keys);
   const questions = Object.fromEntries(
     observed.map((field) => [
@@ -145,7 +146,8 @@ async function selectFields(page, keys, scenario, models, log, signal) {
     const option = questions[field.id].criteria[answers[field.id].choice];
     if (option.value !== scenario.fields[field.id])
       throw new Error(`Jev selected a value inconsistent with the brief for ${field.id}.`);
-    await page.locator(`#${field.id}`).selectOption(option.value);
+    const input = page.locator(`#${field.id}`);
+    await act(input, () => input.selectOption(option.value));
     log({ kind: 'action', source: 'jev', field: field.id, value: option.value });
   }
 }
@@ -161,13 +163,14 @@ async function readRows(dialog) {
   );
 }
 
-async function lookupField(page, field, multiple, scenario, models, log, signal) {
+async function lookupField(page, field, multiple, scenario, models, log, signal, act) {
   const opener = page.locator(`#${field}-lookup`);
-  await opener.click();
+  await act(opener, () => opener.click(), 'scenario');
   const dialog = page.locator(`#lookup-${field}`);
   await dialog.waitFor({ state: 'visible' });
   const query = scenario.lookup_queries[field] || '';
-  await page.locator(`#${field}-modal-search`).fill(query);
+  const search = page.locator(`#${field}-modal-search`);
+  await act(search, () => search.fill(query), 'scenario');
   log({ kind: 'action', source: 'scenario', field: `${field}_search`, value: query });
   const observed = await readRows(dialog);
   if (!observed.length) throw new Error(`No lookup results for ${field}.`);
@@ -215,11 +218,13 @@ async function lookupField(page, field, multiple, scenario, models, log, signal)
     }
     // Apply all membership decisions, including deselection, before committing the modal.
     for (const [index, record] of observed.entries()) {
-      await dialog
-        .getByRole('checkbox', { name: `Select ${record.name}`, exact: true })
-        .setChecked(answers[`record_${index + 1}`].choice === 'include');
+      const checkbox = dialog.getByRole('checkbox', { name: `Select ${record.name}`, exact: true });
+      await act(checkbox, () =>
+        checkbox.setChecked(answers[`record_${index + 1}`].choice === 'include'),
+      );
     }
-    await page.locator(`#${field}-lookup-apply`).click();
+    const apply = page.locator(`#${field}-lookup-apply`);
+    await act(apply, () => apply.click());
     log({
       kind: 'action',
       source: 'jev',
@@ -230,13 +235,14 @@ async function lookupField(page, field, multiple, scenario, models, log, signal)
     const selected = questions.record.criteria[answers.record.choice];
     if (selected.name !== requested)
       throw new Error(`Jev ${field} record does not match the release brief.`);
-    await dialog.getByRole('button', { name: selected.name, exact: true }).click();
+    const button = dialog.getByRole('button', { name: selected.name, exact: true });
+    await act(button, () => button.click());
     log({ kind: 'action', source: 'jev', field, value: { id: selected.id, name: selected.name } });
   }
   await dialog.waitFor({ state: 'hidden' });
 }
 
-async function chooseRiskControls(page, scenario, models, log, signal) {
+async function chooseRiskControls(page, scenario, models, log, signal, act) {
   const read = () =>
     page.evaluate(() => {
       const radioInputs = [...document.querySelectorAll('input[name="customer_impact"]')];
@@ -284,18 +290,20 @@ async function chooseRiskControls(page, scenario, models, log, signal) {
     if (selected.value !== scenario.fields[field.id])
       throw new Error(`Jev ${field.id} choice does not match the release brief.`);
     if (typeof selected.value === 'boolean') {
-      await page.locator(`#${field.id}`).setChecked(selected.value);
+      const input = page.locator(`#${field.id}`);
+      await act(input, () => input.setChecked(selected.value));
     } else {
-      await page.getByRole('radio', { name: selected.value, exact: true }).check();
+      const input = page.getByRole('radio', { name: selected.value, exact: true });
+      await act(input, () => input.check());
     }
     log({ kind: 'action', source: 'jev', field: field.id, value: selected.value });
   }
 }
 
-async function fillFact(page, scenario, key, log) {
+async function fillFact(page, scenario, key, log, act) {
   const input = page.locator(`#${key}`);
   if (!(await input.count())) return;
-  await input.fill(scenario.fields[key]);
+  await act(input, () => input.fill(scenario.fields[key]), 'scenario');
   log({ kind: 'action', source: 'scenario', field: key, value: scenario.fields[key] });
 }
 
@@ -383,9 +391,24 @@ export async function runAutomation({
     void event;
   },
   submit = false,
+  speed = 1,
+  pace = 'scaled',
+  inspector = false,
   signal = undefined,
 }) {
   const started = performance.now();
+  const presentation = createPresentation({ page, speed, pace, inspector, signal, log });
+  const act = presentation.act;
+  const realModels = models;
+  models = {
+    ...realModels,
+    choose: (args) => presentation.infer(() => realModels.choose(args)),
+    narratives: (args) => presentation.infer(() => realModels.narratives(args)),
+  };
+  const click = async (id) => {
+    const input = page.locator(`#${id}`);
+    await act(input, () => input.click(), 'scenario');
+  };
   await page.locator('#software-component-release').waitFor();
   if ((await page.locator('#stage').inputValue()) !== 'Draft') {
     throw new Error(
@@ -399,6 +422,7 @@ export async function runAutomation({
     models,
     log,
     signal,
+    act,
   );
   for (const key of [
     'requested_by',
@@ -406,21 +430,22 @@ export async function runAutomation({
     'release_manager',
     'release_manager_deputy',
   ]) {
-    await lookupField(page, key, false, scenario, models, log, signal);
+    await lookupField(page, key, false, scenario, models, log, signal, act);
   }
   for (const key of ['components', 'repositories']) {
-    await lookupField(page, key, true, scenario, models, log, signal);
+    await lookupField(page, key, true, scenario, models, log, signal, act);
   }
-  for (const key of ['lux_approval', 'short_description']) await fillFact(page, scenario, key, log);
-  await page.locator('#tab-planning').click();
-  await selectFields(page, ['environment'], scenario, models, log, signal);
+  for (const key of ['lux_approval', 'short_description'])
+    await fillFact(page, scenario, key, log, act);
+  await click('tab-planning');
+  await selectFields(page, ['environment'], scenario, models, log, signal, act);
   for (const key of ['release_version', 'implementation_start', 'implementation_end'])
-    await fillFact(page, scenario, key, log);
-  await page.locator('#tab-risk').click();
-  await selectFields(page, ['risk_level'], scenario, models, log, signal);
-  await chooseRiskControls(page, scenario, models, log, signal);
+    await fillFact(page, scenario, key, log, act);
+  await click('tab-risk');
+  await selectFields(page, ['risk_level'], scenario, models, log, signal, act);
+  await chooseRiskControls(page, scenario, models, log, signal, act);
   for (const key of ['outage_minutes', 'security_reference'])
-    await fillFact(page, scenario, key, log);
+    await fillFact(page, scenario, key, log, act);
 
   const fields = await page
     .locator('textarea[data-input-kind="generated-text"]')
@@ -433,7 +458,7 @@ export async function runAutomation({
         current_value: element.value,
       })),
     );
-  const narratives = await models.narratives({ scenario, fields, signal });
+  const narratives = {};
   await ensureUnchanged(
     fields,
     () =>
@@ -449,9 +474,48 @@ export async function runAutomation({
     'Narrative fields',
   );
   for (const section of ['details', 'planning', 'risk', 'activities']) {
-    if (section !== 'details') await page.locator(`#tab-${section}`).click();
+    if (section !== 'details') await click(`tab-${section}`);
     for (const field of fields.filter((field) => field.section === section)) {
-      await page.locator(`#${field.id}`).fill(narratives[field.id]);
+      const input = page.locator(`#${field.id}`);
+      const current = await input.inputValue();
+      const routing = await act(
+        input,
+        () =>
+          models.choose({
+            phase: `delegate:${field.id}`,
+            intent: scenario,
+            observed: [field],
+            questions: {
+              operation: {
+                criteria: {
+                  use_text_model:
+                    'Delegate this open-ended narrative to the text-generation model.',
+                  blocked:
+                    'Stop because this narrative cannot be safely produced from the fictional release brief.',
+                },
+                goal: `Choose how to complete ${field.label}. This is an open-ended narrative, not a finite-choice input. Use the text model when the synthetic release brief provides enough facts. Never invent real test evidence.`,
+              },
+            },
+            signal,
+          }),
+        'jev',
+      );
+      if (routing.operation.choice !== 'use_text_model') {
+        throw new Error(`Jev declined text-model delegation for ${field.id}.`);
+      }
+      log({ kind: 'delegation', source: 'jev', field: field.id, decision: 'use_text_model' });
+      await act(
+        input,
+        async () => {
+          const generated = await models.narratives({ scenario, fields: [field], signal });
+          if ((await input.inputValue()) !== current) {
+            throw new Error(`${field.id} changed during text generation. Nothing typed.`);
+          }
+          narratives[field.id] = generated[field.id];
+          await input.fill(generated[field.id]);
+        },
+        'text-model',
+      );
       log({
         kind: 'action',
         source: 'text-model',
@@ -460,17 +524,22 @@ export async function runAutomation({
       });
     }
   }
-  await page.locator('#post-work-note').click();
-  await page.locator('#attachments').setInputFiles({
-    name: scenario.evidence.name,
-    mimeType: 'text/plain',
-    buffer: Buffer.from(scenario.evidence.text),
-  });
+  await click('post-work-note');
+  await act(
+    page.locator('#add-attachment-bottom'),
+    () =>
+      page.locator('#attachments').setInputFiles({
+        name: scenario.evidence.name,
+        mimeType: 'text/plain',
+        buffer: Buffer.from(scenario.evidence.text),
+      }),
+    'scenario',
+  );
   // Fail before saving/submitting if a field did not receive its requested value.
   await verify(page, scenario, narratives, false);
-  await page.locator('#save-header').click();
+  await click('save-header');
   if (submit) {
-    await page.locator('#submit-header').click();
+    await click('submit-header');
     await page.locator('#software-component-release[data-stage="Confirm Release"]').waitFor();
   }
   const actual = await verify(page, scenario, narratives, submit);
@@ -486,6 +555,7 @@ export async function runAutomation({
   if (!saved || saved.form.short_description !== scenario.fields.short_description) {
     throw new Error('The browser did not persist the completed draft.');
   }
+  await presentation.clear();
   await page.locator('#tab-planning').click();
   await page
     .locator('#main-content')
@@ -495,6 +565,7 @@ export async function runAutomation({
     mode: submit ? 'submitted' : 'saved-draft',
     elapsed_ms: Math.round(performance.now() - started),
     model_statistics: { ...models.statistics },
+    presentation: presentation.statistics(),
     scenario,
     form: actual.values,
     reference_ids: actual.references,

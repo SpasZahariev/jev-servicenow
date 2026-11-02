@@ -14,7 +14,7 @@ Run from the repository root. This skill's deterministic helper is
 
 The browser must expose CDP on `http://127.0.0.1:9222`. Override with `BROWSER_CDP_URL` or `--cdp`. Do not restart or close the user's browser to enable debugging without permission. If debugging is unavailable, explain how to enable it or offer explicit `--new-browser` mode. Never silently launch another browser when attachment fails.
 
-The run makes paid TypeSafe and OpenAI-compatible text-model requests. It reads controls from the live DOM, never screenshots. Jev chooses dropdown values, reference records, multi-record membership, radio values, and checkboxes. The executor uses observed record IDs and stable form attributes. Exact release facts, searches, navigation, dates, attachments, and save operations are deterministic. The text model writes the large narrative fields in one request. No mock provider or canned narrative fallback exists in the demo command.
+The run makes paid TypeSafe and OpenAI-compatible text-model requests. It reads controls from the live DOM, never screenshots. Jev chooses dropdown values, reference records, multi-record membership, radio values, and checkboxes. For each open-ended field it explicitly chooses text-model delegation or stops. Each delegated field then gets its own generation request. The inspector stays teal during the Jev decision and turns purple for generation and insertion. There is no text-model fallback for failed finite-choice decisions. The executor uses observed record IDs and stable form attributes. Exact release facts, searches, navigation, dates, attachments, and save operations are deterministic. The default run makes 18 Jev calls and 8 text calls. No mock provider or canned narrative fallback exists in the demo command.
 
 The default synthetic hotfix exercises every conditional field: Emergency justification, LUX approval, planned outage, security review, and customer communication. Read or edit [assets/release.json](assets/release.json) to change the story. All lookup selections must exist in the local demo catalog. Deployment dates are calculated at launch, not hardcoded in the past.
 
@@ -27,9 +27,12 @@ npm run demo:jev -- --submit
 npm run demo:jev -- --headless --close
 npm run demo:jev -- --new-browser
 npm run demo:jev -- --cdp http://127.0.0.1:9222
+npm run demo:jev -- --speed 0.05 --inspector
 ```
 
 `--submit` submits only to Confirm Release. It never approves, starts, or closes the change. The default only saves a draft.
+
+The runner defaults to `--pace realistic` with the inspector enabled. Inputs run strictly one at a time with a 650 ms pre-input highlight and an 850 ms post-input pause. Generated text gets a 2.2-second review pause. Inference retains its actual latency, and generated fields are pasted whole rather than imitating human typing. The inspector outlines all non-text selections and buttons in teal, and text-model fields in purple. Deterministic steps keep their honest source label but use the same teal border. Exactly one overlay border is used, with no additional input outline or inset border. The badge names the source and target, including modal controls. No animations or screenshots drive the inspector; it clears after success. An explicit `--speed` alone selects the older scaled mode. Use `--pace realistic --speed 0.5` for twice-longer presentation pauses or `--speed 1 --no-inspector` for a fast run.
 
 A unique `demo_run` query parameter gives each new tab its own local-storage draft key, so existing browser drafts remain untouched. Reloading the same tab restores its demo draft. Results and credential-free decision logs are written under `artifacts/jev/`. Attachments contain synthetic evidence and the replica stores metadata only.
 

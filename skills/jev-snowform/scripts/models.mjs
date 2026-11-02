@@ -57,7 +57,7 @@ export function createModels(
   );
   const textBase = validateEndpoint(config.textBase, 'Text model');
   const statistics = { jev_calls: 0, text_calls: 0, requests: 0, model_ms: 0 };
-  const maxRequests = 24;
+  const maxRequests = 80;
 
   async function post(url, key, body, provider, signal) {
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -99,7 +99,7 @@ export function createModels(
   return {
     statistics,
     async choose({ phase, intent, observed, questions, signal = undefined }) {
-      if (++statistics.jev_calls > 16) throw new Error('Jev decision-call budget exceeded.');
+      if (++statistics.jev_calls > 24) throw new Error('Jev decision-call budget exceeded.');
       const started = performance.now();
       const body = {
         model: config.typesafeModel,
@@ -147,7 +147,7 @@ export function createModels(
       return answers;
     },
     async narratives({ scenario, fields, signal = undefined }) {
-      if (++statistics.text_calls > 1) throw new Error('Text-generation call budget exceeded.');
+      if (++statistics.text_calls > 12) throw new Error('Text-generation call budget exceeded.');
       const started = performance.now();
       const result = await post(
         `${textBase}/chat/completions`,
